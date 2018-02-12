@@ -69,12 +69,12 @@ def init_matching(X, n_clusters, dissim):
     for i in range(n_clusters ** 2):
         s = suitors[i]
         sorted_idxs = np.argsort(dissim(reviewers, s))
-        suitor_pref_dict[tuple(s)] = reviewers[sorted_idxs].tolist()
+        suitor_pref_dict[tuple(s)] = reviewers[sorted_idxs].to_list()
 
     # Create preference lists for each reviewer.
     for r in reviewers:
         sorted_idxs = np.argsort(dissim(suitors, r))
-        reviewer_pref_dict[tuple(r)] = suitors[sorted_idxs].tolist()
+        reviewer_pref_dict[tuple(r)] = suitors[sorted_idxs].to_list()
 
     solution = extended_galeshapley(suitor_pref_dict,
                                     reviewer_pref_dict,
@@ -112,7 +112,6 @@ def init_huang(X, n_clusters, dissim):
         while np.all(X[ndx[0]] == centroids, axis=1).any():
             ndx = np.delete(ndx, 0)
         centroids[ik] = X[ndx[0]]
-
     return centroids
 
 
