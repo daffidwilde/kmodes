@@ -35,7 +35,7 @@ def init_matching(X, n_clusters, dissim):
     centroids : {array-like}, shape = (n_clusters, n_attrs)
         The initial centroids for the k-modes algorithm
     """
-    n_attrs = X.shape[1]
+    N, n_attrs = X.shape
     centroids = np.empty((n_clusters, n_attrs), dtype='object')
 
     # Follow Huang's method
@@ -69,17 +69,18 @@ def init_matching(X, n_clusters, dissim):
     for i in range(n_clusters ** 2):
         s = suitors[i]
         sorted_idxs = np.argsort(dissim(reviewers, s))
-        suitor_pref_dict[tuple(s)] = reviewers[sorted_idxs].to_list()
+        suitor_pref_dict[tuple(s)] = [list(r) for r in reviewers[sorted_idxs]]
 
     # Create preference lists for each reviewer.
     for r in reviewers:
         sorted_idxs = np.argsort(dissim(suitors, r))
-        reviewer_pref_dict[tuple(r)] = suitors[sorted_idxs].to_list()
+        reviewer_pref_dict[tuple(r)] = [list(s) for s in suitors[sorted_idxs]]
 
     solution = extended_galeshapley(suitor_pref_dict,
                                     reviewer_pref_dict,
                                     capacities)
-    centroids = np.concatenate(list(solution.values()), axis=0).astype('object')
+
+    centroids = np.array([solution[r][0] for r in solution.keys()])
 
     return centroids
 
