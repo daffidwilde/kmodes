@@ -67,17 +67,24 @@ def init_matching(X, n_clusters, dissim):
         start = r_idx * suitor_size
         end = (r_idx + 1) * suitor_size
         suitors[start:end, :] = X[sorted_idxs[:suitor_size]]
+
     suitors = np.unique(suitors.astype(int), axis=0).astype(object)
+
     # Here we decide how to build the suitors' preference lists.
-    for i in range(len(suitors)):
-        s = suitors[i, :]
-        sorted_idxs = np.argsort(dissim(reviewers, s))
-        suitor_pref_dict[tuple(s)] = [list(r) for r in reviewers[sorted_idxs]]
+    for s_idx in range(len(suitors)):
+        suitor = suitors[s_idx, :]
+        sorted_idxs = np.argsort(dissim(reviewers, suitor))
+        suitor_pref_dict[tuple(suitor)] = [
+            list(reviewer) for reviewer in reviewers[sorted_idxs]
+        ]
 
     # Create preference lists for each reviewer.
-    for r in reviewers:
-        sorted_idxs = np.argsort(dissim(suitors, r))
-        reviewer_pref_dict[tuple(r)] = [list(s) for s in suitors[sorted_idxs]]
+    for r_idx in range(n_clusters):
+        reviewer = reviewers[r_idx]
+        sorted_idxs = np.argsort(dissim(suitors, reviewer))
+        reviewer_pref_dict[tuple(reviewer)] = [
+            list(suitor) for suitor in suitors[sorted_idxs]
+        ]
 
     solution = extended_galeshapley(suitor_pref_dict,
                                     reviewer_pref_dict,
