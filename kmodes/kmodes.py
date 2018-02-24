@@ -35,7 +35,7 @@ def init_matching(X, n_clusters, dissim):
     centroids : {array-like}, shape = (n_clusters, n_attrs)
         The initial centroids for the k-modes algorithm
     """
-    N, n_attrs = X.shape
+    n_points, n_attrs = X.shape
     centroids = np.empty((n_clusters, n_attrs), dtype='object')
 
     # Follow Huang's method
@@ -52,22 +52,25 @@ def init_matching(X, n_clusters, dissim):
 
     # Set up preference dictionaries for suitors and reviewers, giving all
     # reviewers a capacity of 1.
-    suitors = []
+    suitor_size = min(n_points, n_clusters ** 2)
+    suitors = np.empty((n_clusters * suitor_size, n_attrs), dtype='object')
     suitor_pref_dict = {}
     reviewers = centroids
     reviewer_pref_dict = {}
     capacities = {tuple(r): 1 for r in reviewers}
 
     # Build our set of potential suitors
-    for r in reviewers:
-        sorted_idxs = np.argsort(dissim(X, r))
-        suitors.append(X[sorted_idxs[:n_clusters]])
+    for r_idx in range(n_clusters):
+        reviewer = reviewers[r_idx, :]
+        sorted_idxs = np.argsort(dissim(X, reviewer))
 
-    suitors = np.concatenate(suitors)
-
+        start = r_idx * suitor_size
+        end = (r_idx + 1) * suitor_size
+        suitors[start:end, :] = X[sorted_idxs[:suitor_size]]
+    suitors = np.unique(suitors.astype(int), axis=0).astype(object)
     # Here we decide how to build the suitors' preference lists.
-    for i in range(n_clusters ** 2):
-        s = suitors[i]
+    for i in range(len(suitors)):
+        s = suitors[i, :]
         sorted_idxs = np.argsort(dissim(reviewers, s))
         suitor_pref_dict[tuple(s)] = [list(r) for r in reviewers[sorted_idxs]]
 
