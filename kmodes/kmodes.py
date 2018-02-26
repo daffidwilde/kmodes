@@ -123,7 +123,9 @@ def suitor_pref_random(suitors, reviewers, dissim):
     np.random.seed(0)
     suitor_pref_dict = {}
     for suitor in suitors:
-        shuffled_reviewers = np.random.shuffle(reviewers)
+        random_idx = np.random.choice(range(len(reviewers)),
+                                      size=len(reviewers), replace=False)
+        shuffled_reviewers = reviewers[random_idx, :]
         suitor_pref_dict[tuple(suitor)] = [
             list(reviewer) for reviewer in shuffled_reviewers
         ]
