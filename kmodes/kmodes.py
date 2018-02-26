@@ -94,6 +94,47 @@ def init_matching(X, n_clusters, dissim):
 
     return centroids
 
+def suitor_pref_best(suitors, reviewers, dissim):
+    """Return a suitor preference dictionary based on the 'best' ranking of the
+    reviewers available for each suitor.
+    """
+    suitor_pref_dict = {}
+    for s_idx in range(len(suitors)):
+        suitor = suitors[s_idx, :]
+        sorted_idxs = np.argsort(dissim(reviewers, suitor))
+        suitor_pref_dict[tuple(suitor)] = [
+            list(reviewer) for reviewer in reviewers[sorted_idxs]
+        ]
+
+    return suitor_pref_dict
+
+def suitor_pref_worst(suitors, reviewers, dissim):
+    """Return a suitor preference dictionary based on the 'worst' ranking of the
+    reviewers available for each suitor, i.e. the reverse of suitor_pref_best.
+    """
+    suitor_pref_dict = {}
+    for s_idx in range(len(suitors)):
+        suitor = suitors[s_idx, :]
+        sorted_idxs = np.argsort(dissim(reviewers, suitor))[::-1]
+        suitor_pref_dict[tuple(suitor)] = [
+            list(reviewer) for reviewer in reviewers[sorted_idxs]
+        ]
+    return suitor_pref_dict
+
+def suitor_pref_random(suitors, reviewers, dissim):
+    """Return a suitor preference dictionary where each suitor takes a random
+    ordering of the reviewers available to them.
+    """
+    np.random.seed(0)
+    suitor_pref_dict = {}
+    for s_idx in range(len(suitors)):
+        suitor = suitors[s_idx]
+        shuffled_reviewers = np.random.shuffle(reviewers)
+        suitor_pref_dict[tuple(suitor)] = [
+            list(reviewer) for reviewer in shuffled_reviewers
+        ]
+
+    return suitor_pref_dict
 
 def init_huang(X, n_clusters, dissim):
     """Initialize centroids according to method by Huang [1997]."""
