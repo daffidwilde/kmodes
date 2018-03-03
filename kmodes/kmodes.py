@@ -44,20 +44,19 @@ def init_matching(X, n_clusters, dissim, init):
         freq = defaultdict(int)
         for curr_attr in X[:, i_attr]:
             freq[curr_attr] += 1
-
         choices = [
             choice for choice, weight in freq.items() for _ in range(weight)
         ]
         choices = sorted(choices)
         centroids[:, i_attr] = np.random.choice(choices, n_clusters)
-
+    centroids = [tuple(centroid) for centroid in centroids]
     # Set up preference dictionaries for suitors and reviewers, giving all
     # reviewers a capacity of 1.
     suitor_size = min(n_points, n_clusters ** 2)
     suitors = np.empty((n_clusters * suitor_size, n_attrs), dtype='object')
-    reviewers = centroids
+    reviewers = [tuple(centroid) for centroid in centroids]
     reviewer_pref_dict = {}
-    capacities = {tuple(r): 1 for r in reviewers}
+    capacities = {r: 1 for r in reviewers}
 
     # Build our set of potential suitors
     for r_idx, reviewer in enumerate(reviewers):
@@ -66,7 +65,7 @@ def init_matching(X, n_clusters, dissim, init):
         end = (r_idx + 1) * suitor_size
         suitors[start:end, :] = X[sorted_idxs[:suitor_size]]
 
-    suitors = np.vstack({tuple(suitor) for suitor in suitors})
+    suitors = list(set([tuple(suitor) for suitor in suitors]))
 
     # Here we decide how to build the suitors' preference lists.
     if init.lower() == 'matching_best':
@@ -78,16 +77,14 @@ def init_matching(X, n_clusters, dissim, init):
 
     # Create preference lists for each reviewer.
     for reviewer in reviewers:
-        sorted_idxs = np.argsort(dissim(suitors, reviewer))
-        reviewer_pref_dict[tuple(reviewer)] = [
-            list(suitor) for suitor in suitors[sorted_idxs]
-        ]
+        sorted_idxs = np.argsort(dissim(np.array(suitors), np.array(reviewer)))
+        reviewer_pref_dict[reviewer] = [suitors[i] for i in sorted_idxs]
 
     solution = extended_galeshapley(suitor_pref_dict,
                                     reviewer_pref_dict,
                                     capacities)
 
-    centroids = np.array([solution[r][0] for r in solution.keys()])
+    centroids = np.vstack([solution[r][0] for r in solution.keys()])
 
     return centroids
 
@@ -97,10 +94,8 @@ def suitor_pref_best(suitors, reviewers, dissim):
     """
     suitor_pref_dict = {}
     for suitor in suitors:
-        sorted_idxs = np.argsort(dissim(reviewers, suitor))
-        suitor_pref_dict[tuple(suitor)] = [
-            list(reviewer) for reviewer in reviewers[sorted_idxs]
-        ]
+        sorted_idxs = np.argsort(dissim(np.array(reviewers), np.array(suitor)))
+        suitor_pref_dict[suitor] = [reviewers[i] for i in sorted_idxs]
 
     return suitor_pref_dict
 
@@ -110,10 +105,10 @@ def suitor_pref_worst(suitors, reviewers, dissim):
     """
     suitor_pref_dict = {}
     for suitor in suitors:
-        sorted_idxs = np.argsort(dissim(reviewers, suitor))[::-1]
-        suitor_pref_dict[tuple(suitor)] = [
-            list(reviewer) for reviewer in reviewers[sorted_idxs]
-        ]
+        sorted_idxs = np.argsort(dissim(np.array(reviewers),
+                                        np.array(suitor)))[::-1]
+        suitor_pref_dict[suitor] = [reviewers[i] for i in sorted_idxs]
+
     return suitor_pref_dict
 
 def suitor_pref_random(suitors, reviewers, dissim):
@@ -125,10 +120,7 @@ def suitor_pref_random(suitors, reviewers, dissim):
     for suitor in suitors:
         random_idx = np.random.choice(range(len(reviewers)),
                                       size=len(reviewers), replace=False)
-        shuffled_reviewers = reviewers[random_idx, :]
-        suitor_pref_dict[tuple(suitor)] = [
-            list(reviewer) for reviewer in shuffled_reviewers
-        ]
+        suitor_pref_dict[suitor] = [reviewers[i] for i in random_idx]
 
     return suitor_pref_dict
 
