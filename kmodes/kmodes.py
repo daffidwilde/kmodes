@@ -11,12 +11,11 @@ from scipy import sparse
 from matching.algorithms import extended_galeshapley
 from sklearn.base import BaseEstimator, ClusterMixin
 from sklearn.utils.validation import check_array
-from matching.algorithms import extended_galeshapley
 
 from .util import get_max_value_key, encode_features, get_unique_rows, decode_centroids
 from .util.dissim import matching_dissim, ng_dissim
 
-def init_matching(X, n_clusters, dissim):
+def init_matching(X, n_clusters, dissim, init):
     """Initialise centroids according to Huang's method, where the random
     allocation of centroids to datapoints uses the extended Gale-Shapley
     algorithm to solve a capacitated matching game.
@@ -29,6 +28,8 @@ def init_matching(X, n_clusters, dissim):
         The number of clusters to be found
     dissim : str
         The dissimilarity measure to be used
+    init : str
+        The initialisation process to be used
 
     Returns
     -------
@@ -43,57 +44,85 @@ def init_matching(X, n_clusters, dissim):
         freq = defaultdict(int)
         for curr_attr in X[:, i_attr]:
             freq[curr_attr] += 1
-
         choices = [
             choice for choice, weight in freq.items() for _ in range(weight)
         ]
         choices = sorted(choices)
         centroids[:, i_attr] = np.random.choice(choices, n_clusters)
-
+    centroids = [tuple(centroid) for centroid in centroids]
     # Set up preference dictionaries for suitors and reviewers, giving all
     # reviewers a capacity of 1.
     suitor_size = min(n_points, n_clusters ** 2)
     suitors = np.empty((n_clusters * suitor_size, n_attrs), dtype='object')
-    suitor_pref_dict = {}
-    reviewers = centroids
+    reviewers = [tuple(centroid) for centroid in centroids]
     reviewer_pref_dict = {}
-    capacities = {tuple(r): 1 for r in reviewers}
+    capacities = {r: 1 for r in reviewers}
 
     # Build our set of potential suitors
-    for r_idx in range(n_clusters):
-        reviewer = reviewers[r_idx, :]
+    for r_idx, reviewer in enumerate(reviewers):
         sorted_idxs = np.argsort(dissim(X, reviewer))
-
         start = r_idx * suitor_size
         end = (r_idx + 1) * suitor_size
         suitors[start:end, :] = X[sorted_idxs[:suitor_size]]
 
-    suitors = np.unique(suitors.astype(int), axis=0).astype(object)
+    suitors = list(set([tuple(suitor) for suitor in suitors]))
 
     # Here we decide how to build the suitors' preference lists.
-    for s_idx in range(len(suitors)):
-        suitor = suitors[s_idx, :]
-        sorted_idxs = np.argsort(dissim(reviewers, suitor))
-        suitor_pref_dict[tuple(suitor)] = [
-            list(reviewer) for reviewer in reviewers[sorted_idxs]
-        ]
+    if init.lower() == 'matching_best':
+        suitor_pref_dict = suitor_pref_best(suitors, reviewers, dissim)
+    elif init.lower() == 'matching_worst':
+        suitor_pref_dict = suitor_pref_worst(suitors, reviewers, dissim)
+    elif init.lower() == 'matching_random':
+        suitor_pref_dict = suitor_pref_random(suitors, reviewers, dissim)
 
     # Create preference lists for each reviewer.
-    for r_idx in range(n_clusters):
-        reviewer = reviewers[r_idx]
-        sorted_idxs = np.argsort(dissim(suitors, reviewer))
-        reviewer_pref_dict[tuple(reviewer)] = [
-            list(suitor) for suitor in suitors[sorted_idxs]
-        ]
+    for reviewer in reviewers:
+        sorted_idxs = np.argsort(dissim(np.array(suitors), np.array(reviewer)))
+        reviewer_pref_dict[reviewer] = [suitors[i] for i in sorted_idxs]
 
     solution = extended_galeshapley(suitor_pref_dict,
                                     reviewer_pref_dict,
                                     capacities)
 
-    centroids = np.array([solution[r][0] for r in solution.keys()])
+    centroids = np.vstack([solution[r][0] for r in solution.keys()])
 
     return centroids
 
+def suitor_pref_best(suitors, reviewers, dissim):
+    """Return a suitor preference dictionary based on the 'best' ranking of the
+    reviewers available for each suitor.
+    """
+    suitor_pref_dict = {}
+    for suitor in suitors:
+        sorted_idxs = np.argsort(dissim(np.array(reviewers), np.array(suitor)))
+        suitor_pref_dict[suitor] = [reviewers[i] for i in sorted_idxs]
+
+    return suitor_pref_dict
+
+def suitor_pref_worst(suitors, reviewers, dissim):
+    """Return a suitor preference dictionary based on the 'worst' ranking of the
+    reviewers available for each suitor, i.e. the reverse of suitor_pref_best.
+    """
+    suitor_pref_dict = {}
+    for suitor in suitors:
+        sorted_idxs = np.argsort(dissim(np.array(reviewers),
+                                        np.array(suitor)))[::-1]
+        suitor_pref_dict[suitor] = [reviewers[i] for i in sorted_idxs]
+
+    return suitor_pref_dict
+
+def suitor_pref_random(suitors, reviewers, dissim):
+    """Return a suitor preference dictionary where each suitor takes a random
+    ordering of the reviewers available to them.
+    """
+    np.random.seed(0)
+    suitor_pref_dict = {}
+    for suitor in suitors:
+        random_idx = np.random.choice(range(len(reviewers)),
+                                      size=len(reviewers), replace=False)
+        suitor_pref_dict[suitor] = [reviewers[i] for i in random_idx]
+
+    return suitor_pref_dict
 
 def init_huang(X, n_clusters, dissim):
     """Initialize centroids according to method by Huang [1997]."""
@@ -278,8 +307,10 @@ def k_modes(X, n_clusters, max_iter, dissim, init, n_init, verbose):
         # _____ INIT _____
         if verbose:
             print("Init: initializing centroids")
-        if isinstance(init, str) and init.lower() == 'matching':
-            centroids = init_matching(X, n_clusters, dissim)
+        if isinstance(init, str) and init.lower() in ['matching_best',
+                                                      'matching_worst',
+                                                      'matching_random']:
+            centroids = init_matching(X, n_clusters, dissim, init)
         elif isinstance(init, str) and init.lower() == 'huang':
             centroids = init_huang(X, n_clusters, dissim)
         elif isinstance(init, str) and init.lower() == 'cao':
