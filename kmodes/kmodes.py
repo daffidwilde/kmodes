@@ -15,6 +15,14 @@ from sklearn.utils.validation import check_array
 from .util import get_max_value_key, encode_features, get_unique_rows, decode_centroids
 from .util.dissim import matching_dissim, ng_dissim
 
+
+class DataPoint(object):
+    """ A class to allow for duplicate keys in a dictionary. Used only for
+    matching initialisations. """
+
+    def __init__(self, attrs):
+        self.attrs = attrs
+    
 def init_matching(X, n_clusters, dissim, init):
     """Initialise centroids according to Huang's method, where the random
     allocation of centroids to datapoints uses the extended Gale-Shapley
@@ -49,22 +57,24 @@ def init_matching(X, n_clusters, dissim, init):
         ]
         choices = sorted(choices)
         centroids[:, i_attr] = np.random.choice(choices, n_clusters)
-    centroids = [tuple(centroid) for centroid in centroids]
+    centroids = [DataPoint(centroid) for centroid in centroids]
+
     # Set up preference dictionaries for suitors and reviewers, giving all
     # reviewers a capacity of 1.
     suitor_size = min(n_points, n_clusters ** 2)
     suitors = np.empty((n_clusters * suitor_size, n_attrs), dtype='object')
-    reviewers = [tuple(centroid) for centroid in centroids]
+    reviewers = centroids
     reviewer_pref_dict = {}
     capacities = {r: 1 for r in reviewers}
 
     # Build our set of potential suitors
     for r_idx, reviewer in enumerate(reviewers):
-        sorted_idxs = np.argsort(dissim(X, reviewer))
+        sorted_idxs = np.argsort(dissim(X, reviewer.attrs))
         start = r_idx * suitor_size
         end = (r_idx + 1) * suitor_size
         suitors[start:end, :] = X[sorted_idxs[:suitor_size]]
 
+    # Drop duplicate suitors
     suitors = list(set([tuple(suitor) for suitor in suitors]))
 
     # Here we decide how to build the suitors' preference lists.
@@ -77,7 +87,8 @@ def init_matching(X, n_clusters, dissim, init):
 
     # Create preference lists for each reviewer.
     for reviewer in reviewers:
-        sorted_idxs = np.argsort(dissim(np.array(suitors), np.array(reviewer)))
+        sorted_idxs = np.argsort(dissim(np.array(suitors),
+                                        np.array(reviewer.attrs)))
         reviewer_pref_dict[reviewer] = [suitors[i] for i in sorted_idxs]
 
     _, solution = extended_galeshapley(suitor_pref_dict,
@@ -92,9 +103,10 @@ def suitor_pref_best(suitors, reviewers, dissim):
     """Return a suitor preference dictionary based on the 'best' ranking of the
     reviewers available for each suitor.
     """
+    reviewer_attrs = np.array([reviewer.attrs for reviewer in reviewers])
     suitor_pref_dict = {}
     for suitor in suitors:
-        sorted_idxs = np.argsort(dissim(np.array(reviewers), np.array(suitor)))
+        sorted_idxs = np.argsort(dissim(reviewer_attrs, np.array(suitor)))
         suitor_pref_dict[suitor] = [reviewers[i] for i in sorted_idxs]
 
     return suitor_pref_dict
@@ -103,10 +115,10 @@ def suitor_pref_worst(suitors, reviewers, dissim):
     """Return a suitor preference dictionary based on the 'worst' ranking of the
     reviewers available for each suitor, i.e. the reverse of suitor_pref_best.
     """
+    reviewer_attrs = np.array([reviewer.attrs for reviewer in reviewers])
     suitor_pref_dict = {}
     for suitor in suitors:
-        sorted_idxs = np.argsort(dissim(np.array(reviewers),
-                                        np.array(suitor)))[::-1]
+        sorted_idxs = np.argsort(dissim(reviewer_attrs, np.array(suitor)))[::-1]
         suitor_pref_dict[suitor] = [reviewers[i] for i in sorted_idxs]
 
     return suitor_pref_dict
