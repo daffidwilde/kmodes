@@ -80,9 +80,9 @@ def init_matching(X, n_clusters, dissim, init):
         sorted_idxs = np.argsort(dissim(np.array(suitors), np.array(reviewer)))
         reviewer_pref_dict[reviewer] = [suitors[i] for i in sorted_idxs]
 
-    solution = extended_galeshapley(suitor_pref_dict,
-                                    reviewer_pref_dict,
-                                    capacities)
+    _, solution = extended_galeshapley(suitor_pref_dict,
+                                       reviewer_pref_dict,
+                                       capacities)
 
     centroids = np.vstack([solution[r][0] for r in solution.keys()])
 
