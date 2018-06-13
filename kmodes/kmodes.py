@@ -22,7 +22,7 @@ class DataPoint(object):
 
     def __init__(self, attrs):
         self.attrs = attrs
-    
+
 def init_matching(X, n_clusters, dissim, init):
     """Initialise centroids according to Huang's method, where the random
     allocation of centroids to datapoints uses the extended Gale-Shapley
@@ -314,6 +314,7 @@ def k_modes(X, n_clusters, max_iter, dissim, init, n_init, verbose):
     all_labels = []
     all_costs = []
     all_n_iters = []
+    all_epoch_costs = []
     for init_no in range(n_init):
 
         # _____ INIT _____
@@ -355,9 +356,12 @@ def k_modes(X, n_clusters, max_iter, dissim, init, n_init, verbose):
             # Initial assignment to clusters
             clust = np.argmin(dissim(centroids, curpoint, X=X, membship=membship))
             membship[clust, ipoint] = 1
-            # Count attribute values per cluster.
+            # Count att]ibute values per cluster.
             for iattr, curattr in enumerate(curpoint):
                 cl_attr_freq[clust][iattr][curattr] += 1
+
+        _, initial_cost = _labels_cost(X, centroids, dissim, membship)
+
         # Perform an initial centroid update.
         for ik in range(n_clusters):
             for iattr in range(n_attrs):
@@ -372,12 +376,14 @@ def k_modes(X, n_clusters, max_iter, dissim, init, n_init, verbose):
             print("Starting iterations...")
         itr = 0
         converged = False
-        cost = np.Inf
+        cost = initial_cost
+        epoch_costs = [initial_cost]
         while itr <= max_iter and not converged:
             itr += 1
             centroids, moves = _k_modes_iter(X, centroids, cl_attr_freq, membship, dissim)
             # All points seen in this iteration
             labels, ncost = _labels_cost(X, centroids, dissim, membship)
+            epoch_costs.append(ncost)
             converged = (moves == 0) or (ncost >= cost)
             cost = ncost
             if verbose:
@@ -389,13 +395,14 @@ def k_modes(X, n_clusters, max_iter, dissim, init, n_init, verbose):
         all_labels.append(labels)
         all_costs.append(cost)
         all_n_iters.append(itr)
+        all_epoch_costs.append(epoch_costs)
 
     best = np.argmin(all_costs)
     if n_init > 1 and verbose:
         print("Best run was number {}".format(best + 1))
 
     return all_centroids[best], enc_map, all_labels[best], \
-        all_costs[best], all_n_iters[best]
+            all_costs[best], all_n_iters[best], all_epoch_costs[best]
 
 
 class KModes(BaseEstimator, ClusterMixin):
@@ -484,14 +491,18 @@ class KModes(BaseEstimator, ClusterMixin):
         X : array-like, shape=[n_samples, n_features]
         """
 
-        self._enc_cluster_centroids, self._enc_map, self.labels_,\
-            self.cost_, self.n_iter_ = k_modes(X,
-                                               self.n_clusters,
-                                               self.max_iter,
-                                               self.cat_dissim,
-                                               self.init,
-                                               self.n_init,
-                                               self.verbose)
+        self._enc_cluster_centroids, \
+        self._enc_map, \
+        self.labels_, \
+        self.cost_, \
+        self.n_iter_, \
+        self.epoch_costs = k_modes(X,
+                                   self.n_clusters,
+                                   self.max_iter,
+                                   self.cat_dissim,
+                                   self.init,
+                                   self.n_init,
+                                   self.verbose)
         return self
 
     def fit_predict(self, X, y=None, **kwargs):
