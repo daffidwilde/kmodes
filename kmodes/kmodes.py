@@ -8,7 +8,7 @@ from collections import defaultdict
 
 import numpy as np
 from scipy import sparse
-from matching.algorithms import extended_galeshapley
+from matching.algorithms import resident_hospital
 from sklearn.base import BaseEstimator, ClusterMixin
 from sklearn.utils.validation import check_array
 
@@ -22,6 +22,9 @@ class DataPoint(object):
 
     def __init__(self, attrs):
         self.attrs = attrs
+
+    def __repr__(self):
+        return f'DataPoint({self.attrs})'
 
 def init_matching(X, n_clusters, dissim, init):
     """Initialise centroids according to Huang's method, where the random
@@ -61,7 +64,7 @@ def init_matching(X, n_clusters, dissim, init):
 
     # Set up preference dictionaries for suitors and reviewers, giving all
     # reviewers a capacity of 1.
-    suitor_size = min(n_points, n_clusters ** 2)
+    suitor_size = n_points
     suitors = np.empty((n_clusters * suitor_size, n_attrs), dtype='object')
     reviewers = centroids
     reviewer_pref_dict = {}
@@ -91,12 +94,8 @@ def init_matching(X, n_clusters, dissim, init):
                                         np.array(reviewer.attrs)))
         reviewer_pref_dict[reviewer] = [suitors[i] for i in sorted_idxs]
 
-    _, solution = extended_galeshapley(suitor_pref_dict,
-                                       reviewer_pref_dict,
-                                       capacities)
-
-    centroids = np.vstack([solution[r][0] for r in solution.keys()])
-
+    solution = resident_hospital(suitor_pref_dict, reviewer_pref_dict, capacities)
+    centroids = np.vstack([solution[r][0] for r in solution.keys() if solution[r]])
     return centroids
 
 def suitor_pref_best(suitors, reviewers, dissim):
