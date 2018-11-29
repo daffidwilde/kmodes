@@ -8,7 +8,7 @@ from collections import defaultdict
 
 import numpy as np
 from scipy import sparse
-from matching.algorithms import resident_hospital
+from matching.algorithms import hospital_resident
 from sklearn.base import BaseEstimator, ClusterMixin
 from sklearn.utils.validation import check_array
 
@@ -28,8 +28,9 @@ class DataPoint(object):
 
 def init_matching(X, n_clusters, dissim, init):
     """Initialise centroids according to Huang's method, where the random
-    allocation of centroids to datapoints uses the extended Gale-Shapley
-    algorithm to solve a capacitated matching game.
+    allocation of centroids to datapoints uses an extended Gale-Shapley
+    algorithm to solve a capacitated matching game in the context of hospitals
+    and residents.
 
     Parameters
     ----------
@@ -47,6 +48,7 @@ def init_matching(X, n_clusters, dissim, init):
     centroids : {array-like}, shape = (n_clusters, n_attrs)
         The initial centroids for the k-modes algorithm
     """
+
     n_points, n_attrs = X.shape
     centroids = np.empty((n_clusters, n_attrs), dtype='object')
 
@@ -62,78 +64,82 @@ def init_matching(X, n_clusters, dissim, init):
         centroids[:, i_attr] = np.random.choice(choices, n_clusters)
     centroids = [DataPoint(centroid) for centroid in centroids]
 
-    # Set up preference dictionaries for suitors and reviewers, giving all
-    # reviewers a capacity of 1.
-    suitor_size = n_points
-    suitors = np.empty((n_clusters * suitor_size, n_attrs), dtype='object')
-    reviewers = centroids
-    reviewer_pref_dict = {}
-    capacities = {r: 1 for r in reviewers}
+    # Set up preference dictionaries for residents and hospitals, giving all
+    # hospitals a capacity of 1.
+    resident_size = n_points
+    residents = np.empty((n_clusters * resident_size, n_attrs), dtype='object')
+    hospitals = centroids
+    hospital_pref_dict = {}
+    capacities = {r: 1 for r in hospitals}
 
-    # Build our set of potential suitors
-    for r_idx, reviewer in enumerate(reviewers):
-        sorted_idxs = np.argsort(dissim(X, reviewer.attrs))
-        start = r_idx * suitor_size
-        end = (r_idx + 1) * suitor_size
-        suitors[start:end, :] = X[sorted_idxs[:suitor_size]]
+    # Build our set of potential residents
+    for h_idx, hospital in enumerate(hospitals):
+        sorted_idxs = np.argsort(dissim(X, hospital.attrs))
+        start = h_idx * resident_size
+        end = (h_idx + 1) * resident_size
+        residents[start:end, :] = X[sorted_idxs[:resident_size]]
 
-    # Drop duplicate suitors
-    suitors = list(set([tuple(suitor) for suitor in suitors]))
+    # Drop duplicate residents
+    residents = list(set([tuple(resident) for resident in residents]))
 
-    # Here we decide how to build the suitors' preference lists.
+    # Here we decide how to build the residents' preference lists.
     if init.lower() == 'matching_best':
-        suitor_pref_dict = suitor_pref_best(suitors, reviewers, dissim)
+        resident_pref_dict = resident_pref_best(hospitals, residents, dissim)
     elif init.lower() == 'matching_worst':
-        suitor_pref_dict = suitor_pref_worst(suitors, reviewers, dissim)
+        resident_pref_dict = resident_pref_worst(hospitals, residents, dissim)
     elif init.lower() == 'matching_random':
-        suitor_pref_dict = suitor_pref_random(suitors, reviewers, dissim)
+        resident_pref_dict = resident_pref_random(hospitals, residents, dissim)
 
-    # Create preference lists for each reviewer.
-    for reviewer in reviewers:
-        sorted_idxs = np.argsort(dissim(np.array(suitors),
-                                        np.array(reviewer.attrs)))
-        reviewer_pref_dict[reviewer] = [suitors[i] for i in sorted_idxs]
+    # Create preference lists for each hospital.
+    for hospital in hospitals:
+        sorted_idxs = np.argsort(dissim(np.array(residents),
+                                        np.array(hospital.attrs)))
+        hospital_pref_dict[hospital] = [residents[i] for i in sorted_idxs]
 
-    solution = resident_hospital(suitor_pref_dict, reviewer_pref_dict, capacities)
-    centroids = np.vstack([solution[r][0] for r in solution.keys() if solution[r]])
+    solution = hospital_resident(
+        hospital_pref_dict, resident_pref_dict, capacities
+    )
+    centroids = np.vstack(
+        [solution[h][0] for h in solution.keys() if solution[h]]
+    )
+
     return centroids
 
-def suitor_pref_best(suitors, reviewers, dissim):
-    """Return a suitor preference dictionary based on the 'best' ranking of the
-    reviewers available for each suitor.
+def resident_pref_best(hospitals, residents, dissim):
+    """Return a resident preference dictionary based on the 'best' ranking of the
+    hospitals available for each resident.
     """
-    reviewer_attrs = np.array([reviewer.attrs for reviewer in reviewers])
-    suitor_pref_dict = {}
-    for suitor in suitors:
-        sorted_idxs = np.argsort(dissim(reviewer_attrs, np.array(suitor)))
-        suitor_pref_dict[suitor] = [reviewers[i] for i in sorted_idxs]
+    hospital_attrs = np.array([hospital.attrs for hospital in hospitals])
+    resident_pref_dict = {}
+    for resident in residents:
+        sorted_idxs = np.argsort(dissim(hospital_attrs, np.array(resident)))
+        resident_pref_dict[resident] = [hospitals[i] for i in sorted_idxs]
 
-    return suitor_pref_dict
+    return resident_pref_dict
 
-def suitor_pref_worst(suitors, reviewers, dissim):
-    """Return a suitor preference dictionary based on the 'worst' ranking of the
-    reviewers available for each suitor, i.e. the reverse of suitor_pref_best.
+def resident_pref_worst(hospitals, residents, dissim):
+    """Return a resident preference dictionary based on the 'worst' ranking of the
+    hospitals available for each resident, i.e. the reverse of resident_pref_best.
     """
-    reviewer_attrs = np.array([reviewer.attrs for reviewer in reviewers])
-    suitor_pref_dict = {}
-    for suitor in suitors:
-        sorted_idxs = np.argsort(dissim(reviewer_attrs, np.array(suitor)))[::-1]
-        suitor_pref_dict[suitor] = [reviewers[i] for i in sorted_idxs]
+    hospital_attrs = np.array([hospital.attrs for hospital in hospitals])
+    resident_pref_dict = {}
+    for resident in residents:
+        sorted_idxs = np.argsort(dissim(hospital_attrs, np.array(resident)))[::-1]
+        resident_pref_dict[resident] = [hospitals[i] for i in sorted_idxs]
 
-    return suitor_pref_dict
+    return resident_pref_dict
 
-def suitor_pref_random(suitors, reviewers, dissim):
-    """Return a suitor preference dictionary where each suitor takes a random
-    ordering of the reviewers available to them.
+def resident_pref_random(hospitals, residents, dissim):
+    """Return a resident preference dictionary where each resident takes a random
+    ordering of the hospitals available to them.
     """
-    np.random.seed(0)
-    suitor_pref_dict = {}
-    for suitor in suitors:
-        random_idx = np.random.choice(range(len(reviewers)),
-                                      size=len(reviewers), replace=False)
-        suitor_pref_dict[suitor] = [reviewers[i] for i in random_idx]
+    resident_pref_dict = {}
+    for resident in residents:
+        random_idx = np.random.choice(range(len(hospitals)),
+                                      size=len(hospitals), replace=False)
+        resident_pref_dict[resident] = [hospitals[i] for i in random_idx]
 
-    return suitor_pref_dict
+    return resident_pref_dict
 
 def init_huang(X, n_clusters, dissim):
     """Initialize centroids according to method by Huang [1997]."""
