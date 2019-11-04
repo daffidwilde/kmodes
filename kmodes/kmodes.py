@@ -7,144 +7,84 @@ K-modes clustering for categorical data
 from collections import defaultdict
 
 import numpy as np
+from joblib import Parallel, delayed
 from scipy import sparse
-from matching.algorithms import hospital_resident
 from sklearn.base import BaseEstimator, ClusterMixin
+from sklearn.utils import check_random_state
 from sklearn.utils.validation import check_array
 
-from .util import get_max_value_key, encode_features, get_unique_rows, decode_centroids
+from matching.games import HospitalResident
+
+from .util import (
+    decode_centroids,
+    encode_features,
+    get_max_value_key,
+    get_unique_rows,
+    pandas_to_numpy,
+)
 from .util.dissim import matching_dissim, ng_dissim
 
 
-class DataPoint(object):
-    """ A class to allow for duplicate keys in a dictionary. Used only for
-    matching initialisations. """
+def init_matching(X, n_clusters, dissim, random_state):
+    """ Initialise centroids by solving a matching game using a sample of the
+    most frequent categories (as in ``init_huang``) and each of their n_clusters 
+    closest real data points. """
 
-    def __init__(self, attrs):
-        self.attrs = attrs
+    n_rows, n_attrs = X.shape
 
-    def __repr__(self):
-        return f'DataPoint({self.attrs})'
-
-def init_matching(X, n_clusters, dissim, init):
-    """Initialise centroids according to Huang's method, where the random
-    allocation of centroids to datapoints uses an extended Gale-Shapley
-    algorithm to solve a capacitated matching game in the context of hospitals
-    and residents.
-
-    Parameters
-    ----------
-    X : {array-like}, shape = (N, n_attrs)
-        The dataset with N elements described by n_attrs attributes
-    n_clusters : int
-        The number of clusters to be found
-    dissim : str
-        The dissimilarity measure to be used
-    init : str
-        The initialisation process to be used
-
-    Returns
-    -------
-    centroids : {array-like}, shape = (n_clusters, n_attrs)
-        The initial centroids for the k-modes algorithm
-    """
-
-    n_points, n_attrs = X.shape
-    centroids = np.empty((n_clusters, n_attrs), dtype='object')
-
-    # Follow Huang's method
-    for i_attr in range(n_attrs):
+    frequencies = []
+    for iattr in range(n_attrs):
         freq = defaultdict(int)
-        for curr_attr in X[:, i_attr]:
-            freq[curr_attr] += 1
-        choices = [
-            choice for choice, weight in freq.items() for _ in range(weight)
+        for curattr in X[:, iattr]:
+            freq[curattr] += 1 / n_rows
+        frequencies.append(freq)
+
+    centroids = []
+    while len(centroids) < n_clusters:
+        centroid = [
+            random_state.choice(list(freq.keys()), p=list(freq.values()))
+            for freq in frequencies
         ]
-        choices = sorted(choices)
-        centroids[:, i_attr] = np.random.choice(choices, n_clusters)
-    centroids = [DataPoint(centroid) for centroid in centroids]
+        if centroid not in centroids:
+            centroids.append(centroid)
 
-    # Set up preference dictionaries for residents and hospitals, giving all
-    # hospitals a capacity of 1.
-    resident_size = n_points
-    residents = np.empty((n_clusters * resident_size, n_attrs), dtype='object')
-    hospitals = centroids
-    hospital_pref_dict = {}
-    capacities = {r: 1 for r in hospitals}
+    centroids = np.array(centroids, dtype=object)
+    centroid_prefs = {}
+    for centroid in centroids:
+        idxs = np.argsort(dissim(X, centroid))[:n_clusters]
+        centroid_prefs[tuple(centroid)] = [tuple(point) for point in X[idxs]]
 
-    # Build our set of potential residents
-    for h_idx, hospital in enumerate(hospitals):
-        sorted_idxs = np.argsort(dissim(X, hospital.attrs))
-        start = h_idx * resident_size
-        end = (h_idx + 1) * resident_size
-        residents[start:end, :] = X[sorted_idxs[:resident_size]]
+    chosen_points = {p for prefs in centroid_prefs.values() for p in prefs}
 
-    # Drop duplicate residents
-    residents = list(set([tuple(resident) for resident in residents]))
+    datapoint_prefs = {}
+    for point in chosen_points:
+        idxs = np.argsort(dissim(centroids, point))
+        point_tuple = tuple(point)
+        datapoint_prefs[point_tuple] = [
+            tuple(centroid)
+            for centroid in centroids[idxs]
+            if point_tuple in centroid_prefs[tuple(centroid)]
+        ]
 
-    # Here we decide how to build the residents' preference lists.
-    if init.lower() == 'matching_best':
-        resident_pref_dict = resident_pref_best(hospitals, residents, dissim)
-    elif init.lower() == 'matching_worst':
-        resident_pref_dict = resident_pref_worst(hospitals, residents, dissim)
-    elif init.lower() == 'matching_random':
-        resident_pref_dict = resident_pref_random(hospitals, residents, dissim)
-
-    # Create preference lists for each hospital.
-    for hospital in hospitals:
-        sorted_idxs = np.argsort(dissim(np.array(residents),
-                                        np.array(hospital.attrs)))
-        hospital_pref_dict[hospital] = [residents[i] for i in sorted_idxs]
-
-    solution = hospital_resident(
-        hospital_pref_dict, resident_pref_dict, capacities
-    )
-    centroids = np.vstack(
-        [solution[h][0] for h in solution.keys() if solution[h]]
+    game = HospitalResident.create_from_dictionaries(
+        resident_prefs=centroid_prefs,
+        hospital_prefs=datapoint_prefs,
+        capacities={point: 1 for point in datapoint_prefs},
     )
 
+    matching = game.solve()
+    inverted_matching = {
+        point: centroid for centroid, points in matching.items() for point in points
+    }
+
+    centroids = np.array([list(point.name) for point in inverted_matching.keys()])
     return centroids
 
-def resident_pref_best(hospitals, residents, dissim):
-    """Return a resident preference dictionary based on the 'best' ranking of the
-    hospitals available for each resident.
-    """
-    hospital_attrs = np.array([hospital.attrs for hospital in hospitals])
-    resident_pref_dict = {}
-    for resident in residents:
-        sorted_idxs = np.argsort(dissim(hospital_attrs, np.array(resident)))
-        resident_pref_dict[resident] = [hospitals[i] for i in sorted_idxs]
 
-    return resident_pref_dict
-
-def resident_pref_worst(hospitals, residents, dissim):
-    """Return a resident preference dictionary based on the 'worst' ranking of the
-    hospitals available for each resident, i.e. the reverse of resident_pref_best.
-    """
-    hospital_attrs = np.array([hospital.attrs for hospital in hospitals])
-    resident_pref_dict = {}
-    for resident in residents:
-        sorted_idxs = np.argsort(dissim(hospital_attrs, np.array(resident)))[::-1]
-        resident_pref_dict[resident] = [hospitals[i] for i in sorted_idxs]
-
-    return resident_pref_dict
-
-def resident_pref_random(hospitals, residents, dissim):
-    """Return a resident preference dictionary where each resident takes a random
-    ordering of the hospitals available to them.
-    """
-    resident_pref_dict = {}
-    for resident in residents:
-        random_idx = np.random.choice(range(len(hospitals)),
-                                      size=len(hospitals), replace=False)
-        resident_pref_dict[resident] = [hospitals[i] for i in random_idx]
-
-    return resident_pref_dict
-
-def init_huang(X, n_clusters, dissim):
+def init_huang(X, n_clusters, dissim, random_state):
     """Initialize centroids according to method by Huang [1997]."""
     n_attrs = X.shape[1]
-    centroids = np.empty((n_clusters, n_attrs), dtype='object')
+    centroids = np.empty((n_clusters, n_attrs), dtype="object")
     # determine frequencies of attributes
     for iattr in range(n_attrs):
         freq = defaultdict(int)
@@ -160,15 +100,16 @@ def init_huang(X, n_clusters, dissim):
         # So that we are consistent between Python versions,
         # each with different dict ordering.
         choices = sorted(choices)
-        centroids[:, iattr] = np.random.choice(choices, n_clusters)
+        centroids[:, iattr] = random_state.choice(choices, n_clusters)
     # The previously chosen centroids could result in empty clusters,
     # so set centroid to closest point in X.
     for ik in range(n_clusters):
         ndx = np.argsort(dissim(X, centroids[ik]))
-        # We want the centroid to be unique.
-        while np.all(X[ndx[0]] == centroids, axis=1).any():
+        # We want the centroid to be unique, if possible.
+        while np.all(X[ndx[0]] == centroids, axis=1).any() and ndx.shape[0] > 1:
             ndx = np.delete(ndx, 0)
         centroids[ik] = X[ndx[0]]
+
     return centroids
 
 
@@ -178,7 +119,7 @@ def init_cao(X, n_clusters, dissim):
     Note: O(N * attr * n_clusters**2), so watch out with large n_clusters
     """
     n_points, n_attrs = X.shape
-    centroids = np.empty((n_clusters, n_attrs), dtype='object')
+    centroids = np.empty((n_clusters, n_attrs), dtype="object")
     # Method is based on determining density of points.
     dens = np.zeros(n_points)
     for iattr in range(n_attrs):
@@ -186,8 +127,7 @@ def init_cao(X, n_clusters, dissim):
         for val in X[:, iattr]:
             freq[val] += 1
         for ipoint in range(n_points):
-            dens[ipoint] += freq[X[ipoint, iattr]] / float(n_attrs)
-    dens /= n_points
+            dens[ipoint] += freq[X[ipoint, iattr]] / float(n_points) / float(n_attrs)
 
     # Choose initial centroids based on distance and density.
     centroids[0] = X[np.argmax(dens)]
@@ -203,8 +143,9 @@ def init_cao(X, n_clusters, dissim):
     return centroids
 
 
-def move_point_cat(point, ipoint, to_clust, from_clust, cl_attr_freq,
-                   membship, centroids):
+def move_point_cat(
+    point, ipoint, to_clust, from_clust, cl_attr_freq, membship, centroids
+):
     """Move point between clusters, categorical attributes."""
     membship[to_clust, ipoint] = 1
     membship[from_clust, ipoint] = 0
@@ -243,8 +184,8 @@ def _labels_cost(X, centroids, dissim, membship=None):
     X = check_array(X)
 
     n_points = X.shape[0]
-    cost = 0.
-    labels = np.empty(n_points, dtype=np.uint8)
+    cost = 0.0
+    labels = np.empty(n_points, dtype=np.uint16)
     for ipoint, curpoint in enumerate(X):
         diss = dissim(centroids, curpoint, X=X, membship=membship)
         clust = np.argmin(diss)
@@ -254,7 +195,7 @@ def _labels_cost(X, centroids, dissim, membship=None):
     return labels, cost
 
 
-def _k_modes_iter(X, centroids, cl_attr_freq, membship, dissim):
+def _k_modes_iter(X, centroids, cl_attr_freq, membship, dissim, random_state):
     """Single iteration of k-modes clustering algorithm"""
     moves = 0
     for ipoint, curpoint in enumerate(X):
@@ -276,24 +217,125 @@ def _k_modes_iter(X, centroids, cl_attr_freq, membship, dissim):
         if not membship[old_clust, :].any():
             from_clust = membship.sum(axis=1).argmax()
             choices = [ii for ii, ch in enumerate(membship[from_clust, :]) if ch]
-            rindx = np.random.choice(choices)
+            rindx = random_state.choice(choices)
 
             cl_attr_freq, membship, centroids = move_point_cat(
-                X[rindx], rindx, old_clust, from_clust, cl_attr_freq, membship, centroids
+                X[rindx],
+                rindx,
+                old_clust,
+                from_clust,
+                cl_attr_freq,
+                membship,
+                centroids,
             )
 
     return centroids, moves
 
 
-def k_modes(X, n_clusters, max_iter, dissim, init, n_init, verbose):
-    """k-modes algorithm"""
+def k_modes_single(
+    X,
+    n_clusters,
+    n_points,
+    n_attrs,
+    max_iter,
+    dissim,
+    init,
+    init_no,
+    verbose,
+    random_state,
+):
+    random_state = check_random_state(random_state)
+    # _____ INIT _____
+    if verbose:
+        print("Init: initializing centroids")
+    if isinstance(init, str) and init.lower() == "huang":
+        centroids = init_huang(X, n_clusters, dissim, random_state)
+    elif isinstance(init, str) and init.lower() == "cao":
+        centroids = init_cao(X, n_clusters, dissim)
+    elif isinstance(init, str) and init.lower() == "matching":
+        centroids = init_matching(X, n_clusters, dissim, random_state)
+    elif isinstance(init, str) and init.lower() == "random":
+        seeds = random_state.choice(range(n_points), n_clusters)
+        centroids = X[seeds]
+    elif hasattr(init, "__array__"):
+        # Make sure init is a 2D array.
+        if len(init.shape) == 1:
+            init = np.atleast_2d(init).T
+        assert (
+            init.shape[0] == n_clusters
+        ), "Wrong number of initial centroids in init ({}, should be {}).".format(
+            init.shape[0], n_clusters
+        )
+        assert (
+            init.shape[1] == n_attrs
+        ), "Wrong number of attributes in init ({}, should be {}).".format(
+            init.shape[1], n_attrs
+        )
+        centroids = np.asarray(init, dtype=np.uint16)
+    else:
+        raise NotImplementedError
 
+    if verbose:
+        print("Init: initializing clusters")
+    membship = np.zeros((n_clusters, n_points), dtype=np.uint8)
+    # cl_attr_freq is a list of lists with dictionaries that contain the
+    # frequencies of values per cluster and attribute.
+    cl_attr_freq = [
+        [defaultdict(int) for _ in range(n_attrs)] for _ in range(n_clusters)
+    ]
+    for ipoint, curpoint in enumerate(X):
+        # Initial assignment to clusters
+        clust = np.argmin(dissim(centroids, curpoint, X=X, membship=membship))
+        membship[clust, ipoint] = 1
+        # Count attribute values per cluster.
+        for iattr, curattr in enumerate(curpoint):
+            cl_attr_freq[clust][iattr][curattr] += 1
+    # Perform an initial centroid update.
+    for ik in range(n_clusters):
+        for iattr in range(n_attrs):
+            if sum(membship[ik]) == 0:
+                # Empty centroid, choose randomly
+                centroids[ik, iattr] = random_state.choice(X[:, iattr])
+            else:
+                centroids[ik, iattr] = get_max_value_key(cl_attr_freq[ik][iattr])
+
+    # _____ ITERATION _____
+    if verbose:
+        print("Starting iterations...")
+    itr = 0
+    labels = None
+    converged = False
+
+    _, cost = _labels_cost(X, centroids, dissim, membship)
+
+    epoch_costs = [cost]
+    while itr <= max_iter and not converged:
+        itr += 1
+        centroids, moves = _k_modes_iter(
+            X, centroids, cl_attr_freq, membship, dissim, random_state
+        )
+        # All points seen in this iteration
+        labels, ncost = _labels_cost(X, centroids, dissim, membship)
+        converged = (moves == 0) or (ncost >= cost)
+        epoch_costs.append(ncost)
+        cost = ncost
+        if verbose:
+            print(
+                "Run {}, iteration: {}/{}, moves: {}, cost: {}".format(
+                    init_no + 1, itr, max_iter, moves, cost
+                )
+            )
+
+    return centroids, labels, cost, itr, epoch_costs
+
+
+def k_modes(
+    X, n_clusters, max_iter, dissim, init, n_init, verbose, random_state, n_jobs
+):
+    """k-modes algorithm"""
+    random_state = check_random_state(random_state)
     if sparse.issparse(X):
         raise TypeError("k-modes does not support sparse data.")
-
-    # Convert pandas objects to numpy arrays.
-    if 'pandas' in str(X.__class__):
-        X = X.values
 
     X = check_array(X, dtype=None)
 
@@ -302,8 +344,10 @@ def k_modes(X, n_clusters, max_iter, dissim, init, n_init, verbose):
     X, enc_map = encode_features(X)
 
     n_points, n_attrs = X.shape
-    assert n_clusters <= n_points, "Cannot have more clusters ({}) " \
-                                   "than data points ({}).".format(n_clusters, n_points)
+    assert n_clusters <= n_points, (
+        "Cannot have more clusters ({}) "
+        "than data points ({}).".format(n_clusters, n_points)
+    )
 
     # Are there more n_clusters than unique rows? Then set the unique
     # rows as initial values and skip iteration.
@@ -315,99 +359,54 @@ def k_modes(X, n_clusters, max_iter, dissim, init, n_init, verbose):
         n_clusters = n_unique
         init = unique
 
-    all_centroids = []
-    all_labels = []
-    all_costs = []
-    all_n_iters = []
-    all_epoch_costs = []
-    for init_no in range(n_init):
-
-        # _____ INIT _____
-        if verbose:
-            print("Init: initializing centroids")
-        if isinstance(init, str) and init.lower() in ['matching_best',
-                                                      'matching_worst',
-                                                      'matching_random']:
-            centroids = init_matching(X, n_clusters, dissim, init)
-        elif isinstance(init, str) and init.lower() == 'huang':
-            centroids = init_huang(X, n_clusters, dissim)
-        elif isinstance(init, str) and init.lower() == 'cao':
-            centroids = init_cao(X, n_clusters, dissim)
-        elif isinstance(init, str) and init.lower() == 'random':
-            seeds = np.random.choice(range(n_points), n_clusters)
-            centroids = X[seeds]
-        elif hasattr(init, '__array__'):
-            # Make sure init is a 2D array.
-            if len(init.shape) == 1:
-                init = np.atleast_2d(init).T
-            assert init.shape[0] == n_clusters, \
-                "Wrong number of initial centroids in init ({}, should be {})."\
-                .format(init.shape[0], n_clusters)
-            assert init.shape[1] == n_attrs, \
-                "Wrong number of attributes in init ({}, should be {})."\
-                .format(init.shape[1], n_attrs)
-            centroids = np.asarray(init, dtype=np.uint8)
-        else:
-            raise NotImplementedError
-
-        if verbose:
-            print("Init: initializing clusters")
-        membship = np.zeros((n_clusters, n_points), dtype=np.uint8)
-        # cl_attr_freq is a list of lists with dictionaries that contain the
-        # frequencies of values per cluster and attribute.
-        cl_attr_freq = [[defaultdict(int) for _ in range(n_attrs)]
-                        for _ in range(n_clusters)]
-        for ipoint, curpoint in enumerate(X):
-            # Initial assignment to clusters
-            clust = np.argmin(dissim(centroids, curpoint, X=X, membship=membship))
-            membship[clust, ipoint] = 1
-            # Count att]ibute values per cluster.
-            for iattr, curattr in enumerate(curpoint):
-                cl_attr_freq[clust][iattr][curattr] += 1
-
-        _, initial_cost = _labels_cost(X, centroids, dissim, membship)
-
-        # Perform an initial centroid update.
-        for ik in range(n_clusters):
-            for iattr in range(n_attrs):
-                if sum(membship[ik]) == 0:
-                    # Empty centroid, choose randomly
-                    centroids[ik, iattr] = np.random.choice(X[:, iattr])
-                else:
-                    centroids[ik, iattr] = get_max_value_key(cl_attr_freq[ik][iattr])
-
-        # _____ ITERATION _____
-        if verbose:
-            print("Starting iterations...")
-        itr = 0
-        converged = False
-        cost = initial_cost
-        epoch_costs = [initial_cost]
-        while itr <= max_iter and not converged:
-            itr += 1
-            centroids, moves = _k_modes_iter(X, centroids, cl_attr_freq, membship, dissim)
-            # All points seen in this iteration
-            labels, ncost = _labels_cost(X, centroids, dissim, membship)
-            epoch_costs.append(ncost)
-            converged = (moves == 0) or (ncost >= cost)
-            cost = ncost
-            if verbose:
-                print("Run {}, iteration: {}/{}, moves: {}, cost: {}"
-                      .format(init_no + 1, itr, max_iter, moves, cost))
-
-        # Store result of current run.
-        all_centroids.append(centroids)
-        all_labels.append(labels)
-        all_costs.append(cost)
-        all_n_iters.append(itr)
-        all_epoch_costs.append(epoch_costs)
+    results = []
+    seeds = random_state.randint(np.iinfo(np.int32).max, size=n_init)
+    if n_jobs == 1:
+        for init_no in range(n_init):
+            results.append(
+                k_modes_single(
+                    X,
+                    n_clusters,
+                    n_points,
+                    n_attrs,
+                    max_iter,
+                    dissim,
+                    init,
+                    init_no,
+                    verbose,
+                    seeds[init_no],
+                )
+            )
+    else:
+        results = Parallel(n_jobs=n_jobs, verbose=0)(
+            delayed(k_modes_single)(
+                X,
+                n_clusters,
+                n_points,
+                n_attrs,
+                max_iter,
+                dissim,
+                init,
+                init_no,
+                verbose,
+                seed,
+            )
+            for init_no, seed in enumerate(seeds)
+        )
+    all_centroids, all_labels, all_costs, all_n_iters, all_epoch_costs = zip(*results)
 
     best = np.argmin(all_costs)
     if n_init > 1 and verbose:
         print("Best run was number {}".format(best + 1))
 
-    return all_centroids[best], enc_map, all_labels[best], \
-            all_costs[best], all_n_iters[best], all_epoch_costs[best]
+    return (
+        all_centroids[best],
+        enc_map,
+        all_labels[best],
+        all_costs[best],
+        all_n_iters[best],
+        all_epoch_costs[best],
+    )
 
 
 class KModes(BaseEstimator, ClusterMixin):
@@ -428,15 +427,12 @@ class KModes(BaseEstimator, ClusterMixin):
         Dissimilarity function used by the k-modes algorithm for categorical variables.
         Defaults to the matching dissimilarity function.
 
-    init : {'Huang', 'Cao', 'random', 'matching' or an ndarray}, default: 'Cao'
+    init : {'Huang', 'Cao', 'random' or an ndarray}, default: 'Cao'
         Method for initialization:
         'Huang': Method in Huang [1997, 1998]
         'Cao': Method in Cao et al. [2009]
         'random': choose 'n_clusters' observations (rows) at random from
         data for the initial centroids.
-        'matching': Follow Huang's method and assign centroids to points in the
-        set by considering the situation as a capacitated matching game to be
-        solved with an extension of the Gale-Shapley algorithm.
         If an ndarray is passed, it should be of shape (n_clusters, n_features)
         and gives the initial centroids.
 
@@ -447,6 +443,20 @@ class KModes(BaseEstimator, ClusterMixin):
 
     verbose : int, optional
         Verbosity mode.
+
+    random_state : int, RandomState instance or None, optional, default: None
+        If int, random_state is the seed used by the random number generator;
+        If RandomState instance, random_state is the random number generator;
+        If None, the random number generator is the RandomState instance used
+        by `np.random`.
+
+    n_jobs : int, default: 1
+        The number of jobs to use for the computation. This works by computing
+        each of the n_init runs in parallel.
+        If -1 all CPUs are used. If 1 is given, no parallel computing code is
+        used at all, which is useful for debugging. For n_jobs below -1,
+        (n_cpus + 1 + n_jobs) are used. Thus for n_jobs = -2, all CPUs but one
+        are used.
 
     Attributes
     ----------
@@ -463,6 +473,9 @@ class KModes(BaseEstimator, ClusterMixin):
     n_iter_ : int
         The number of iterations the algorithm ran for.
 
+    epoch_costs_ :
+        The cost of the algorithm at each epoch from start to completion.
+
     Notes
     -----
     See:
@@ -472,8 +485,17 @@ class KModes(BaseEstimator, ClusterMixin):
 
     """
 
-    def __init__(self, n_clusters=8, max_iter=100, cat_dissim=matching_dissim,
-                 init='Cao', n_init=1, verbose=0):
+    def __init__(
+        self,
+        n_clusters=8,
+        max_iter=100,
+        cat_dissim=matching_dissim,
+        init="Cao",
+        n_init=1,
+        verbose=0,
+        random_state=None,
+        n_jobs=1,
+    ):
 
         self.n_clusters = n_clusters
         self.max_iter = max_iter
@@ -481,11 +503,18 @@ class KModes(BaseEstimator, ClusterMixin):
         self.init = init
         self.n_init = n_init
         self.verbose = verbose
-        if ((isinstance(self.init, str) and self.init == 'Cao') or
-                hasattr(self.init, '__array__')) and self.n_init > 1:
+        self.random_state = random_state
+        self.n_jobs = n_jobs
+        if (
+            (isinstance(self.init, str) and self.init.title() in ["Cao"])
+            or hasattr(self.init, "__array__")
+            and self.n_init > 1
+        ):
             if self.verbose:
-                print("Initialization method and algorithm are deterministic. "
-                      "Setting n_init to 1.")
+                print(
+                    "Initialization method and algorithm are deterministic. "
+                    "Setting n_init to 1."
+                )
             self.n_init = 1
 
     def fit(self, X, y=None, **kwargs):
@@ -495,19 +524,20 @@ class KModes(BaseEstimator, ClusterMixin):
         ----------
         X : array-like, shape=[n_samples, n_features]
         """
+        X = pandas_to_numpy(X)
 
-        self._enc_cluster_centroids, \
-        self._enc_map, \
-        self.labels_, \
-        self.cost_, \
-        self.n_iter_, \
-        self.epoch_costs = k_modes(X,
-                                   self.n_clusters,
-                                   self.max_iter,
-                                   self.cat_dissim,
-                                   self.init,
-                                   self.n_init,
-                                   self.verbose)
+        random_state = check_random_state(self.random_state)
+        self._enc_cluster_centroids, self._enc_map, self.labels_, self.cost_, self.n_iter_, self.epoch_costs_ = k_modes(
+            X,
+            self.n_clusters,
+            self.max_iter,
+            self.cat_dissim,
+            self.init,
+            self.n_init,
+            self.verbose,
+            random_state,
+            self.n_jobs,
+        )
         return self
 
     def fit_predict(self, X, y=None, **kwargs):
@@ -531,21 +561,27 @@ class KModes(BaseEstimator, ClusterMixin):
         labels : array, shape [n_samples,]
             Index of the cluster each sample belongs to.
         """
-        assert hasattr(self, '_enc_cluster_centroids'), "Model not yet fitted."
+
+        assert hasattr(self, "_enc_cluster_centroids"), "Model not yet fitted."
 
         if self.verbose and self.cat_dissim == ng_dissim:
-            print("Ng's dissimilarity measure was used to train this model, "
-                  "but now that it is predicting the model will fall back to "
-                  "using simple matching dissimilarity.")
+            print(
+                "Ng's dissimilarity measure was used to train this model, "
+                "but now that it is predicting the model will fall back to "
+                "using simple matching dissimilarity."
+            )
 
+        X = pandas_to_numpy(X)
         X = check_array(X, dtype=None)
         X, _ = encode_features(X, enc_map=self._enc_map)
         return _labels_cost(X, self._enc_cluster_centroids, self.cat_dissim)[0]
 
     @property
     def cluster_centroids_(self):
-        if hasattr(self, '_enc_cluster_centroids'):
+        if hasattr(self, "_enc_cluster_centroids"):
             return decode_centroids(self._enc_cluster_centroids, self._enc_map)
         else:
-            raise AttributeError("'{}' object has no attribute 'cluster_centroids_' "
-                                 "because the model is not yet fitted.")
+            raise AttributeError(
+                "'{}' object has no attribute 'cluster_centroids_' "
+                "because the model is not yet fitted."
+            )
