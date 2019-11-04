@@ -7,9 +7,9 @@
 .. image:: https://coveralls.io/repos/nicodv/kmodes/badge.svg
     :target: https://coveralls.io/r/nicodv/kmodes
     :alt: Test Coverage
-.. image:: https://landscape.io/github/nicodv/kmodes/master/landscape.svg?style=flat
-    :target: https://landscape.io/github/nicodv/kmodes/master
-    :alt: Code Health
+.. image:: https://api.codacy.com/project/badge/Grade/cb19f1f1093a44fa845ebfdaf76975f6
+   :alt: Codacy Badge
+   :target: https://app.codacy.com/app/nicodv/kmodes?utm_source=github.com&utm_medium=referral&utm_content=nicodv/kmodes&utm_campaign=Badge_Grade_Dashboard
 .. image:: https://requires.io/github/nicodv/kmodes/requirements.svg
      :target: https://requires.io/github/nicodv/kmodes/requirements/
      :alt: Requirements Status
@@ -84,10 +84,10 @@ Usage
 
     import numpy as np
     from kmodes.kmodes import KModes
-    
+
     # random categorical data
     data = np.random.choice(20, (100, 10))
-    
+
     km = KModes(n_clusters=4, init='Huang', n_init=5, verbose=1)
 
     clusters = km.fit_predict(data)
@@ -95,7 +95,7 @@ Usage
     # Print the cluster centroids
     print(km.cluster_centroids_)
 
-The examples directory showcases simple use cases of both k-modes 
+The examples directory showcases simple use cases of both k-modes
 ('soybean.py') and k-prototypes ('stocks.py').
 
 Missing / unseen data
@@ -120,6 +120,31 @@ The k-prototypes also accepts :code:`np.NaN` values as missing values for
 the categorical variables, but does *not* accept missing values for the
 numerical values. It is up to the user to come up with a way of
 handling these missing data that is appropriate for the problem at hand.
+
+Parallel execution
+------------------
+
+The k-modes and k-prototypes implementations both offer support for
+multiprocessing via the 
+`joblib library <https://pythonhosted.org/joblib/generated/joblib.Parallel.html>`_,
+similar to e.g. scikit-learn's implementation of k-means, using the
+:code:`n_jobs` parameter. It generally does not make sense to set more jobs
+than there are processor cores available on your system.
+
+This potentially speeds up any execution with more than one initialization try,
+:code:`n_init > 1`, which may be helpful to reduce the execution time for
+larger problems. Note that it depends on your problem whether multiprocessing
+actually helps, so be sure to try that out first. You can check out the
+examples for some benchmarks.
+
+FAQ
+---
+
+Q: I'm seeing errors such as :code:`TypeError: '<' not supported between instances of 'str' and 'float'`
+when using the :code:`kprototypes` algorithm.
+
+A: One or more of your numerical feature columns have string values in them. Make sure that all 
+columns have consistent data types.
 
 References
 ----------

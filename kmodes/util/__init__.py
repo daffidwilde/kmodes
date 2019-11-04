@@ -5,6 +5,10 @@ Generic utilities for clustering
 import numpy as np
 
 
+def pandas_to_numpy(x):
+    return x.values if 'pandas' in str(x.__class__) else x
+
+
 def get_max_value_key(dic):
     """Gets the key for the maximum value in a dict."""
     v = np.array(list(dic.values()))
@@ -28,12 +32,6 @@ def encode_features(X, enc_map=None):
     Unknown values during prediction get a value of -1. np.NaNs are ignored
     during encoding, and get treated as unknowns during prediction.
     """
-    if np.issubdtype(X.dtype, np.integer):
-        # Already integer type, so we can take a shortcut. Simply reshape
-        # the data to mapping dictionaries, and do nothing with X.
-        enc_map = [{val: val for val in np.unique(col)} for col in X.T]
-        return X, enc_map
-
     if enc_map is None:
         fit = True
         # We will calculate enc_map, so initialize the list of column mappings.
@@ -67,4 +65,4 @@ def decode_centroids(encoded, mapping):
 
 def get_unique_rows(a):
     """Gets the unique rows in a numpy array."""
-    return np.vstack({tuple(row) for row in a})
+    return np.vstack(list({tuple(row) for row in a}))

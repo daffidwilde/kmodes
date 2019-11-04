@@ -3,8 +3,8 @@ max-line-length: 90
 ignore-paths:
   - setup.py
   - examples/
+  - .github/
 python-targets:
-  - 2
   - 3
 pep8:
   disable:

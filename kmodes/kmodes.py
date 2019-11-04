@@ -12,7 +12,6 @@ from scipy import sparse
 from sklearn.base import BaseEstimator, ClusterMixin
 from sklearn.utils import check_random_state
 from sklearn.utils.validation import check_array
-
 from matching.games import HospitalResident
 
 from .util import (
@@ -505,6 +504,7 @@ class KModes(BaseEstimator, ClusterMixin):
         self.verbose = verbose
         self.random_state = random_state
         self.n_jobs = n_jobs
+
         if (
             (isinstance(self.init, str) and self.init.title() in ["Cao"])
             or hasattr(self.init, "__array__")
