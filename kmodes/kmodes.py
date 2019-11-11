@@ -50,10 +50,15 @@ def init_matching(X, n_clusters, dissim, random_state):
     centroids = np.array(centroids, dtype=object)
     centroid_prefs = {}
     for centroid in centroids:
-        idxs = np.argsort(dissim(X, centroid))[:n_clusters]
-        centroid_prefs[tuple(centroid)] = [tuple(point) for point in X[idxs]]
+        idxs = np.argsort(dissim(X, centroid))
+        prefs = []
+        for point in X[idxs]:
+            if tuple(point) not in prefs and len(prefs) < n_clusters:
+                prefs.append(tuple(point))
 
-    chosen_points = {p for prefs in centroid_prefs.values() for p in prefs}
+        centroid_prefs[tuple(centroid)] = prefs
+
+    chosen_points = {point for prefs in centroid_prefs.values() for point in prefs}
 
     datapoint_prefs = {}
     for point in chosen_points:
@@ -73,10 +78,12 @@ def init_matching(X, n_clusters, dissim, random_state):
 
     matching = game.solve()
     inverted_matching = {
-        point: centroid for centroid, points in matching.items() for point in points
+        potential_centroid: point
+        for point, point_matches in matching.items()
+        for potential_centroid in point_matches
     }
 
-    centroids = np.array([list(point.name) for point in inverted_matching.keys()])
+    centroids = np.array([list(point.name) for point in inverted_matching.values()])
     return centroids
 
 
