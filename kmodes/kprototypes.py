@@ -144,6 +144,8 @@ def k_prototypes_single(Xnum, Xcat, nnumattrs, ncatattrs, n_clusters, n_points,
             centroids = kmodes.init_huang(Xcat, n_clusters, cat_dissim, random_state)
         elif isinstance(init, str) and init.lower() == 'cao':
             centroids = kmodes.init_cao(Xcat, n_clusters, cat_dissim)
+        elif isinstance(init, str) and init.lower() == 'matching':
+            centroids = kmodes.init_matching(Xcat, n_clusters, cat_dissim, random_state)
         elif isinstance(init, str) and init.lower() == 'random':
             seeds = random_state.choice(range(n_points), n_clusters)
             centroids = Xcat[seeds]

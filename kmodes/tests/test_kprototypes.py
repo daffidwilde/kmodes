@@ -88,6 +88,15 @@ class TestKProtoTypes(unittest.TestCase):
         assert_cluster_splits_equal(result, expected)
         self.assertTrue(result.dtype == np.dtype(np.uint16))
 
+    def test_kprototypes_matching_stocks(self):
+        kproto_matching = kprototypes.KPrototypes(n_clusters=4, n_init=4,
+                                                  init='matching', verbose=2,
+                                                  random_state=42, n_jobs=4)
+        result = kproto_matching.fit_predict(STOCKS, categorical=[1, 2])
+        expected = np.array([2, 0, 0, 0, 0, 3, 3, 3, 3, 1, 1, 1])
+        assert_cluster_splits_equal(result, expected)
+        self.assertTrue(result.dtype == np.dtype(np.uint16))
+
     def test_kprotoypes_predict_stocks(self):
         kproto_cao = kprototypes.KPrototypes(n_clusters=4, init='Cao',
                                              verbose=2, random_state=42)

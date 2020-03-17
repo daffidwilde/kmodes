@@ -269,9 +269,9 @@ class TestKModes(unittest.TestCase):
         kmodes_matching = KModes(n_clusters=4, n_init=4, init='matching',
                                  verbose=2, random_state=42, n_jobs=4)
         result = kmodes_matching.fit_predict(SOYBEAN)
-        expected = np.array([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0,
-                             0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 3, 3,
-                             3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 1, 3, 1])
+        expected = np.array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 3, 3, 3, 3,
+                             3, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1,
+                             2, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2])
         assert_cluster_splits_equal(result, expected)
         self.assertTrue(result.dtype == np.dtype(np.uint16))
 
